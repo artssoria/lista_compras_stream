@@ -1,13 +1,18 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
+from datetime import datetime
 
 DB_NAME = "shopping_list.db"
 
-# Inicializar base de datos
+# ==========================
+# BASE DE DATOS
+# ==========================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    
+    # Tabla de productos
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS shopping_list (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,10 +22,20 @@ def init_db():
         offer TEXT
     )
     ''')
+    
+    # Tabla de historial de compras
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS shopping_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        total REAL NOT NULL
+    )
+    ''')
+    
     conn.commit()
     conn.close()
 
-# Funciones CRUD
+# CRUD productos
 def agregar_producto(nombre, cantidad, precio, oferta):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -56,6 +71,36 @@ def obtener_lista():
     conn.close()
     return productos
 
+# Historial
+def guardar_historial(total):
+    fecha = datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO shopping_history (date, total) VALUES (?, ?)',
+        (fecha, total)
+    )
+    conn.commit()
+    conn.close()
+
+def obtener_historial():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM shopping_history ORDER BY date DESC')
+    historial = cursor.fetchall()
+    conn.close()
+    return historial
+
+def borrar_lista():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM shopping_list')
+    conn.commit()
+    conn.close()
+
+# ==========================
+# CÁLCULOS
+# ==========================
 def calcular_totales(productos):
     total = 0
     data = []
@@ -83,38 +128,58 @@ def calcular_subtotal_vivo(cantidad, precio, oferta):
             pass
     return subtotal
 
-# Mostrar tabla y total
-def mostrar_tabla():
-    productos = obtener_lista()
-    if productos:
-        data, total = calcular_totales(productos)
-        df = pd.DataFrame(data, columns=["ID", "Nombre", "Cantidad", "Precio", "Subtotal"])
-        st.table(df.style.format({"Precio": "{:.2f}", "Subtotal": "{:.2f}"}))
-        st.success(f"💰 Total: ${total:.2f}")
-    else:
-        st.warning("La lista de compras está vacía.")
-
-# Interfaz
+# ==========================
+# INTERFAZ
+# ==========================
 def main():
     st.set_page_config(page_title="Lista de Compras", layout="centered")
-    st.title("🛒 Lista de Compras")
+    st.title("🛒 Lista de Compras con Historial")
     init_db()
 
-    menu = ["Lista y Gestión", "Eliminar Producto"]
+    menu = ["Lista y Gestión", "Historial de Compras"]
     choice = st.sidebar.selectbox("Menú", menu)
 
     if choice == "Lista y Gestión":
         st.subheader("📋 Lista de Compras")
-        mostrar_tabla()
+        
+        productos = obtener_lista()
+        if productos:
+            data, total = calcular_totales(productos)
+            df = pd.DataFrame(data, columns=["ID", "Nombre", "Cantidad", "Precio", "Subtotal"])
+            st.table(df.style.format({"Precio": "{:.2f}", "Subtotal": "{:.2f}"}))
+            st.success(f"💰 Total: ${total:.2f}")
+
+            # Botones de acción
+            cols = st.columns(3)
+            with cols[0]:
+                if st.button("🗑️ Borrar Producto"):
+                    id_borrar = st.number_input("ID a borrar", min_value=1, step=1)
+                    if st.button("Confirmar Borrado"):
+                        eliminar_producto(id_borrar)
+                        st.success("Producto eliminado.")
+                        st.rerun()
+            with cols[1]:
+                if st.button("🆕 Iniciar nueva compra"):
+                    guardar_historial(total)
+                    borrar_lista()
+                    st.success("Compra guardada en historial y lista vaciada.")
+                    st.rerun()
+            with cols[2]:
+                if st.button("❌ Vaciar lista"):
+                    borrar_lista()
+                    st.success("Lista vaciada.")
+                    st.rerun()
+
+        else:
+            st.warning("La lista está vacía.")
 
         st.markdown("---")
         st.subheader("➕ Agregar / ✏️ Modificar Producto")
 
-        productos = obtener_lista()
         opciones = {f"Nuevo producto": None}
         opciones.update({f"{p[0]} - {p[1]}": p[0] for p in productos})
 
-        seleccion = st.selectbox("Selecciona un producto para modificar o elige 'Nuevo producto'", list(opciones.keys()))
+        seleccion = st.selectbox("Selecciona un producto para modificar o 'Nuevo producto'", list(opciones.keys()))
         id_producto = opciones[seleccion]
 
         if id_producto:
@@ -129,7 +194,6 @@ def main():
             precio = st.number_input("Precio", min_value=0.0, format="%.2f")
             oferta = st.text_input("Oferta (ej: '2x1' o '0.10')")
 
-        # 🔹 Cálculo en vivo del subtotal
         subtotal_vivo = calcular_subtotal_vivo(cantidad, precio, oferta)
         st.info(f"💵 Subtotal estimado: ${subtotal_vivo:.2f}")
 
@@ -145,19 +209,14 @@ def main():
             else:
                 st.error("Por favor ingresa un nombre y precio válido.")
 
-    elif choice == "Eliminar Producto":
-        st.subheader("🗑️ Eliminar Producto")
-        productos = obtener_lista()
-        if productos:
-            opciones = {f"{p[0]} - {p[1]}": p[0] for p in productos}
-            seleccion = st.selectbox("Selecciona un producto para eliminar", list(opciones.keys()))
-            if st.button("Eliminar"):
-                eliminar_producto(opciones[seleccion])
-                st.success("Producto eliminado correctamente.")
-                st.rerun()
+    elif choice == "Historial de Compras":
+        st.subheader("📜 Historial de Compras")
+        historial = obtener_historial()
+        if historial:
+            df_hist = pd.DataFrame(historial, columns=["ID", "Fecha", "Total"])
+            st.table(df_hist.style.format({"Total": "{:.2f}"}))
         else:
-            st.warning("No hay productos para eliminar.")
+            st.info("No hay compras registradas.")
 
 if __name__ == "__main__":
     main()
-    
