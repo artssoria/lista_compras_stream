@@ -2,278 +2,391 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import os
 
+# ==========================
+# CONFIGURACIÓN
+# ==========================
 DB_NAME = "shopping_list.db"
 
+st.set_page_config(page_title="🛒 Lista de Compras", layout="wide")
+
 # ==========================
-# BASE DE DATOS
+# BASE DE DATOS - Inicialización
 # ==========================
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    
-    # Tabla de productos
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS shopping_list (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        quantity INTEGER NOT NULL,
-        price REAL NOT NULL,
-        offer TEXT
-    )
-    ''')
-    
-    # Tabla de historial de compras con comercio
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS shopping_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        store TEXT NOT NULL,
-        total REAL NOT NULL
-    )
-    ''')
-
-    # Tabla para detalle de productos de compras pasadas
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS purchase_details (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        purchase_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        quantity INTEGER NOT NULL,
-        price REAL NOT NULL,
-        offer TEXT,
-        FOREIGN KEY (purchase_id) REFERENCES shopping_history(id)
-    )
-    ''')
-    
-    conn.commit()
-    conn.close()
-
-# ==========================
-# CRUD productos
-# ==========================
-def agregar_producto(nombre, cantidad, precio, oferta):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        'INSERT INTO shopping_list (name, quantity, price, offer) VALUES (?, ?, ?, ?)',
-        (nombre, cantidad, precio, oferta)
-    )
-    conn.commit()
-    conn.close()
-
-def modificar_producto(id_producto, nombre, cantidad, precio, oferta):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        'UPDATE shopping_list SET name=?, quantity=?, price=?, offer=? WHERE id=?',
-        (nombre, cantidad, precio, oferta, id_producto)
-    )
-    conn.commit()
-    conn.close()
-
-def eliminar_producto(id_producto):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM shopping_list WHERE id=?', (id_producto,))
-    conn.commit()
-    conn.close()
-
-def obtener_lista():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM shopping_list')
-    productos = cursor.fetchall()
-    conn.close()
-    return productos
-
-def borrar_lista():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM shopping_list')
-    conn.commit()
-    conn.close()
-
-# ==========================
-# Historial
-# ==========================
-def guardar_historial(total, comercio):
-    fecha = datetime.now().strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        'INSERT INTO shopping_history (date, store, total) VALUES (?, ?, ?)',
-        (fecha, comercio, total)
-    )
-    purchase_id = cursor.lastrowid
-
-    # Guardar detalle de la compra
-    productos = obtener_lista()
-    for _, nombre, cantidad, precio, oferta in productos:
-        cursor.execute(
-            'INSERT INTO purchase_details (purchase_id, name, quantity, price, offer) VALUES (?, ?, ?, ?, ?)',
-            (purchase_id, nombre, cantidad, precio, oferta)
+    """Inicializa todas las tablas necesarias."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS shopping_list (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            price REAL NOT NULL,
+            offer TEXT
         )
+        ''')
 
-    conn.commit()
-    conn.close()
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS shopping_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            store TEXT NOT NULL,
+            total REAL NOT NULL
+        )
+        ''')
 
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS purchase_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            purchase_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            price REAL NOT NULL,
+            offer TEXT,
+            FOREIGN KEY (purchase_id) REFERENCES shopping_history(id)
+        )
+        ''')
+        conn.commit()
+
+# ==========================
+# FUNCIONES DE BASE DE DATOS
+# ==========================
+@st.cache_data(ttl=60)
+def obtener_lista():
+    """Obtiene la lista actual de compras."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            df = pd.read_sql_query("SELECT id, name, quantity, price, offer FROM shopping_list", conn)
+        return df
+    except Exception as e:
+        st.error(f"Error al cargar la lista: {e}")
+        return pd.DataFrame(columns=["id", "name", "quantity", "price", "offer"])
+
+@st.cache_data(ttl=60)
 def obtener_historial():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM shopping_history ORDER BY date DESC')
-    historial = cursor.fetchall()
-    conn.close()
-    return historial
+    """Obtiene el historial de compras."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            df = pd.read_sql_query("""
+                SELECT id, date, store, total 
+                FROM shopping_history 
+                ORDER BY date DESC, id DESC
+            """, conn)
+        return df
+    except Exception as e:
+        st.error(f"Error al cargar el historial: {e}")
+        return pd.DataFrame(columns=["id", "date", "store", "total"])
 
 def obtener_detalle_compra(purchase_id):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('SELECT name, quantity, price, offer FROM purchase_details WHERE purchase_id=?', (purchase_id,))
-    detalle = cursor.fetchall()
-    conn.close()
-    return detalle
+    """Obtiene el detalle de una compra específica."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            df = pd.read_sql_query("""
+                SELECT name, quantity, price, offer 
+                FROM purchase_details 
+                WHERE purchase_id = ?
+            """, conn, params=(purchase_id,))
+        return df
+    except Exception as e:
+        st.error(f"Error al cargar el detalle: {e}")
+        return pd.DataFrame()
+
+def agregar_producto(nombre, cantidad, precio, oferta):
+    """Agrega un producto a la lista."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO shopping_list (name, quantity, price, offer) VALUES (?, ?, ?, ?)',
+                (nombre.strip(), cantidad, precio, oferta.strip() if oferta else None)
+            )
+            conn.commit()
+        st.cache_data.clear()  # Limpiar caché
+    except Exception as e:
+        st.error(f"Error al agregar producto: {e}")
+
+def modificar_producto(id_producto, nombre, cantidad, precio, oferta):
+    """Modifica un producto existente."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.execute(
+                'UPDATE shopping_list SET name=?, quantity=?, price=?, offer=? WHERE id=?',
+                (nombre.strip(), cantidad, precio, oferta.strip() if oferta else None, id_producto)
+            )
+            conn.commit()
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Error al modificar producto: {e}")
+
+def eliminar_producto(id_producto):
+    """Elimina un producto por ID."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.execute('DELETE FROM shopping_list WHERE id=?', (id_producto,))
+            conn.commit()
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Error al eliminar producto: {e}")
+
+def borrar_lista():
+    """Vacía toda la lista actual."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.execute('DELETE FROM shopping_list')
+            conn.commit()
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Error al vaciar lista: {e}")
+
+def guardar_historial(total, comercio):
+    """Guarda la compra actual en el historial."""
+    fecha = datetime.now().strftime("%Y-%m-%d")
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO shopping_history (date, store, total) VALUES (?, ?, ?)',
+                (fecha, comercio.strip(), total)
+            )
+            purchase_id = cursor.lastrowid
+
+            # Insertar productos actuales
+            productos = obtener_lista().values.tolist()
+            for _, nombre, cantidad, precio, oferta in productos:
+                cursor.execute(
+                    'INSERT INTO purchase_details (purchase_id, name, quantity, price, offer) VALUES (?, ?, ?, ?, ?)',
+                    (purchase_id, nombre, cantidad, precio, oferta)
+                )
+            conn.commit()
+        st.cache_data.clear()
+        st.success(f"✅ Compra guardada en '{comercio}' y lista vaciada.")
+    except Exception as e:
+        st.error(f"Error al guardar historial: {e}")
 
 # ==========================
 # CÁLCULOS
 # ==========================
-def calcular_totales(productos):
-    total = 0
-    data = []
-    for id, nombre, cantidad, precio, oferta in productos:
-        subtotal = cantidad * precio
-        if oferta == "2x1":
-            subtotal = (cantidad // 2 * precio) + (cantidad % 2 * precio)
-        elif oferta:
-            try:
-                subtotal *= (1 - float(oferta))
-            except:
-                pass
-        total += subtotal
-        data.append([id, nombre, cantidad, precio, subtotal])
-    return data, total
-
-def calcular_subtotal_vivo(cantidad, precio, oferta):
-    subtotal = cantidad * precio
+def calcular_subtotal(cantidad, precio, oferta):
+    """Calcula el subtotal considerando ofertas."""
+    if not oferta:
+        return cantidad * precio
+    oferta = oferta.strip()
     if oferta == "2x1":
-        subtotal = (cantidad // 2 * precio) + (cantidad % 2 * precio)
-    elif oferta:
-        try:
-            subtotal *= (1 - float(oferta))
-        except:
-            pass
-    return subtotal
+        return (cantidad // 2 + cantidad % 2) * precio
+    try:
+        descuento = float(oferta)
+        return cantidad * precio * (1 - descuento)
+    except ValueError:
+        return cantidad * precio  # Si no es válido, ignorar oferta
+
+def calcular_totales(df):
+    """Calcula totales y devuelve DataFrame con subtotal."""
+    df_copy = df.copy()
+    df_copy["Subtotal"] = df_copy.apply(
+        lambda row: calcular_subtotal(row["quantity"], row["price"], row["offer"]), axis=1
+    )
+    total = df_copy["Subtotal"].sum()
+    return df_copy, total
 
 # ==========================
-# INTERFAZ
+# INTERFAZ DE USUARIO
 # ==========================
 def main():
-    st.set_page_config(page_title="Lista de Compras", layout="centered")
-    st.title("🛒 Lista de Compras con Historial")
     init_db()
+    st.title("🛒 Lista de Compras Inteligente")
 
-    menu = ["Lista y Gestión", "Historial de Compras"]
-    choice = st.sidebar.selectbox("Menú", menu)
+    menu = st.sidebar.radio("📌 Menú", ["🛒 Lista de Compras", "📜 Historial"])
+    st.sidebar.divider()
 
-    if choice == "Lista y Gestión":
-        st.subheader("📋 Lista de Compras")
-        
-        productos = obtener_lista()
-        comercio_input = st.text_input("🏪 Nombre del comercio para la compra actual")
+    if menu == "🛒 Lista de Compras":
+        gestionar_lista()
+    elif menu == "📜 Historial":
+        ver_historial()
 
-        if productos:
-            data, total = calcular_totales(productos)
-            df = pd.DataFrame(data, columns=["ID", "Nombre", "Cantidad", "Precio", "Subtotal"])
-            st.table(df.style.format({"Precio": "{:.2f}", "Subtotal": "{:.2f}"}))
-            st.success(f"💰 Total: ${total:.2f}")
+# --------------------------
+# GESTIÓN DE LISTA
+# --------------------------
+def gestionar_lista():
+    st.subheader("📋 Tu Lista de Compras")
+    
+    # Cargar lista
+    df = obtener_lista()
+    
+    # Campo para comercio
+    comercio = st.text_input("🏪 Nombre del comercio", key="comercio_actual")
 
-            cols = st.columns(3)
-            with cols[0]:
-                id_borrar = st.number_input("ID a borrar", min_value=1, step=1)
-                if st.button("🗑️ Borrar Producto"):
+    if not df.empty:
+        df_display, total = calcular_totales(df)
+        st.dataframe(
+            df_display[["name", "quantity", "price", "offer", "Subtotal"]]
+            .rename(columns={
+                "name": "Producto",
+                "quantity": "Cant.",
+                "price": "Precio",
+                "offer": "Oferta",
+                "Subtotal": "Subtotal"
+            }),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Precio": st.column_config.NumberColumn(format="%.2f €"),
+                "Subtotal": st.column_config.NumberColumn(format="%.2f €"),
+            }
+        )
+        st.markdown(f"### **Total: ${total:.2f}**")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            id_borrar = st.number_input("ID a eliminar", min_value=1, step=1, key="del_id")
+            if st.button("🗑️ Eliminar", use_container_width=True):
+                if id_borrar in df["id"].values:
                     eliminar_producto(id_borrar)
                     st.success("Producto eliminado.")
-                    st.rerun()
-
-            with cols[1]:
-                if st.button("🆕 Iniciar nueva compra"):
-                    if comercio_input.strip():
-                        guardar_historial(total, comercio_input)
-                        borrar_lista()
-                        st.success(f"Compra guardada en historial ({comercio_input}) y lista vaciada.")
-                        st.rerun()
-                    else:
-                        st.error("Debes ingresar el nombre del comercio antes de guardar.")
-
-            with cols[2]:
-                if st.button("❌ Vaciar lista"):
-                    borrar_lista()
-                    st.success("Lista vaciada.")
-                    st.rerun()
-
-        else:
-            st.warning("La lista está vacía.")
-
-        st.markdown("---")
-        st.subheader("➕ Agregar / ✏️ Modificar Producto")
-
-        opciones = {f"Nuevo producto": None}
-        opciones.update({f"{p[0]} - {p[1]}": p[0] for p in productos})
-
-        seleccion = st.selectbox("Selecciona un producto para modificar o 'Nuevo producto'", list(opciones.keys()))
-        id_producto = opciones[seleccion]
-
-        if id_producto:
-            producto = next(p for p in productos if p[0] == id_producto)
-            nombre = st.text_input("Nombre", producto[1])
-            cantidad = st.number_input("Cantidad", min_value=1, value=producto[2])
-            precio = st.number_input("Precio", min_value=0.0, format="%.2f", value=producto[3])
-            oferta = st.text_input("Oferta", producto[4] if producto[4] else "")
-        else:
-            nombre = st.text_input("Nombre")
-            cantidad = st.number_input("Cantidad", min_value=1, value=1)
-            precio = st.number_input("Precio", min_value=0.0, format="%.2f")
-            oferta = st.text_input("Oferta (ej: '2x1' o '0.10')")
-
-        subtotal_vivo = calcular_subtotal_vivo(cantidad, precio, oferta)
-        st.info(f"💵 Subtotal estimado: ${subtotal_vivo:.2f}")
-
-        if st.button("Guardar"):
-            if nombre and precio > 0:
-                if id_producto:
-                    modificar_producto(id_producto, nombre, cantidad, precio, oferta)
-                    st.success("Producto modificado correctamente.")
                 else:
-                    agregar_producto(nombre, cantidad, precio, oferta)
-                    st.success("Producto agregado correctamente.")
-                st.rerun()
+                    st.error("ID no encontrado.")
+
+        with col2:
+            if st.button("🆕 Guardar y vaciar lista", use_container_width=True):
+                if not comercio.strip():
+                    st.error("⚠️ Ingresa el nombre del comercio.")
+                else:
+                    guardar_historial(total, comercio)
+                    st.session_state.comercio_actual = ""
+
+        with col3:
+            if st.button("❌ Vaciar todo", type="secondary", use_container_width=True):
+                borrar_lista()
+                st.success("Lista vaciada.")
+
+    else:
+        st.info("📭 Tu lista está vacía. Agrega productos abajo.")
+
+    # --- Formulario de agregar/modificar ---
+    st.divider()
+    st.subheader("➕ Agregar o Modificar Producto")
+
+    # Opciones de productos anteriores
+    productos_previos = obtener_lista()["name"].unique().tolist() if not obtener_lista().empty else []
+
+    with st.form("producto_form"):
+        seleccion = st.selectbox(
+            "Selecciona un producto para editar o deja 'Nuevo'",
+            ["➕ Nuevo producto"] + [f"✏️ {name}" for name in productos_previos]
+        )
+        id_editar = None
+        datos_actuales = {}
+
+        if seleccion != "➕ Nuevo producto":
+            nombre_selec = seleccion[3:]  # quitar "✏️ "
+            fila = obtener_lista()[obtener_lista()["name"] == nombre_selec].iloc[0]
+            id_editar = fila["id"]
+            datos_actuales = fila.to_dict()
+
+        # Campos
+        nombre = st.text_input(
+            "Nombre del producto",
+            value=datos_actuales.get("name", ""),
+            placeholder="Ej: Leche"
+        )
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            cantidad = st.number_input(
+                "Cantidad",
+                min_value=1,
+                value=int(datos_actuales.get("quantity", 1))
+            )
+        with col_b:
+            precio = st.number_input(
+                "Precio (€)",
+                min_value=0.0,
+                value=float(datos_actuales.get("price", 0.0)),
+                format="%.2f"
+            )
+
+        # Oferta con opciones predefinidas
+        ofertas_predef = ["", "2x1", "0.10 (10%)", "0.20 (20%)", "0.50 (50%)"]
+        oferta_texto = st.selectbox(
+            "Oferta",
+            ofertas_predef,
+            index=ofertas_predef.index(datos_actuales.get("offer", "")) if datos_actuales.get("offer") in ofertas_predef else 0
+        )
+        oferta_manual = st.text_input("Otra oferta (ej: 0.15)", value="")
+        oferta = oferta_manual or oferta_texto
+
+        # Subtotal en tiempo real
+        subtotal = calcular_subtotal(cantidad, precio, oferta)
+        st.markdown(f"**💵 Subtotal estimado: ${subtotal:.2f}**")
+
+        submitted = st.form_submit_button("💾 Guardar producto", type="primary")
+
+        if submitted:
+            if not nombre.strip():
+                st.error("⚠️ El nombre del producto es obligatorio.")
+            elif precio <= 0:
+                st.error("⚠️ El precio debe ser mayor a 0.")
             else:
-                st.error("Por favor ingresa un nombre y precio válido.")
-
-    elif choice == "Historial de Compras":
-        st.subheader("📜 Historial de Compras")
-        historial = obtener_historial()
-        if historial:
-            df_hist = pd.DataFrame(historial, columns=["ID", "Fecha", "Comercio", "Total"])
-            st.table(df_hist.style.format({"Total": "{:.2f}"}))
-
-            compra_id = st.number_input("ID de compra para ver detalle", min_value=1, step=1)
-            if st.button("Mostrar detalle"):
-                detalle = obtener_detalle_compra(compra_id)
-                if detalle:
-                    data = []
-                    total_detalle = 0
-                    for nombre, cantidad, precio, oferta in detalle:
-                        subtotal = calcular_subtotal_vivo(cantidad, precio, oferta)
-                        total_detalle += subtotal
-                        data.append([nombre, cantidad, precio, subtotal])
-                    df_detalle = pd.DataFrame(data, columns=["Nombre", "Cantidad", "Precio", "Subtotal"])
-                    st.table(df_detalle.style.format({"Precio": "{:.2f}", "Subtotal": "{:.2f}"}))
-                    st.success(f"💰 Total de la compra: ${total_detalle:.2f}")
+                if id_editar:
+                    modificar_producto(id_editar, nombre, cantidad, precio, oferta)
+                    st.success("✅ Producto actualizado.")
                 else:
-                    st.info("No se encontraron productos para esta compra.")
-        else:
-            st.info("No hay compras registradas.")
+                    # Evitar duplicados
+                    if nombre in productos_previos:
+                        st.warning("⚠️ Este producto ya existe. Edítalo desde la lista.")
+                    else:
+                        agregar_producto(nombre, cantidad, precio, oferta)
+                        st.success("✅ Producto agregado.")
+                st.rerun()
 
+# --------------------------
+# HISTORIAL
+# --------------------------
+def ver_historial():
+    st.subheader("📜 Historial de Compras")
+    df_hist = obtener_historial()
+
+    if df_hist.empty:
+        st.info("📭 Aún no has realizado compras.")
+        return
+
+    st.dataframe(
+        df_hist[["id", "date", "store", "total"]]
+        .rename(columns={"id": "ID", "date": "Fecha", "store": "Comercio", "total": "Total"}),
+        use_container_width=True,
+        hide_index=True,
+        column_config={"total": st.column_config.NumberColumn(format="%.2f €")}
+    )
+
+    st.divider()
+    compra_id = st.number_input("Ver detalle de compra (ID)", min_value=1, step=1)
+    if st.button("🔍 Mostrar detalle"):
+        detalle = obtener_detalle_compra(compra_id)
+        if not detalle.empty:
+            detalle_calc, total_detalle = calcular_totales(detalle)
+            st.dataframe(
+                detalle_calc[["name", "quantity", "price", "offer", "Subtotal"]]
+                .rename(columns={
+                    "name": "Producto",
+                    "quantity": "Cant.",
+                    "price": "Precio",
+                    "offer": "Oferta",
+                    "Subtotal": "Subtotal"
+                }),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Precio": st.column_config.NumberColumn(format="%.2f €"),
+                    "Subtotal": st.column_config.NumberColumn(format="%.2f €"),
+                }
+            )
+            st.markdown(f"### **Total de la compra: ${total_detalle:.2f}**")
+        else:
+            st.info("❌ No se encontró detalle para ese ID.")
+
+# ==========================
+# EJECUCIÓN
+# ==========================
 if __name__ == "__main__":
     main()
