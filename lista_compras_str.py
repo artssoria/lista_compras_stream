@@ -161,7 +161,7 @@ def guardar_historial(total, comercio):
             conn.commit()
         st.cache_data.clear()
         st.success(f"✅ Compra guardada en '{comercio}' y lista vaciada.")
-        st.session_state["comercio_actual"] = ""
+        st.rerun()  # ✅ Refresca la app: el campo 'comercio_actual' se limpiará al no tener valor fijo
     except Exception as e:
         st.error(f"Error al guardar historial: {e}")
 
@@ -179,6 +179,7 @@ def limpiar_base_de_datos():
             conn.commit()
         st.cache_data.clear()
         st.success("✅ Base de datos limpiada por completo.")
+        st.rerun()
     except Exception as e:
         st.error(f"Error al limpiar la base de datos: {e}")
 
@@ -263,11 +264,9 @@ def main():
 # --------------------------
 def gestionar_lista():
     st.subheader("📋 Tu Lista de Compras")
-    
-    if "comercio_actual" not in st.session_state:
-        st.session_state.comercio_actual = ""
 
-    comercio = st.text_input("🏪 Nombre del comercio", value=st.session_state.comercio_actual, key="comercio_actual")
+    # ✅ Solo usamos 'key', sin 'value'. Streamlit maneja el estado automáticamente
+    comercio = st.text_input("🏪 Nombre del comercio", key="comercio_actual")
 
     df = obtener_lista()
 
@@ -304,10 +303,10 @@ def gestionar_lista():
 
         with col2:
             if st.button("🆕 Guardar y vaciar lista", use_container_width=True):
-                if not comercio.strip():
+                if not comercio or not comercio.strip():
                     st.error("⚠️ Ingresa el nombre del comercio.")
                 else:
-                    guardar_historial(total, comercio)
+                    guardar_historial(total, comercio.strip())
 
         with col3:
             if st.button("❌ Vaciar todo", type="secondary", use_container_width=True):
@@ -367,6 +366,7 @@ def gestionar_lista():
                 placeholder="Ej: 150.99"
             )
 
+        # Validar precio
         try:
             if not precio_str or precio_str.strip() == "":
                 precio = None
@@ -376,7 +376,7 @@ def gestionar_lista():
                     st.error("⚠️ El precio no puede ser negativo.")
                     precio = None
         except ValueError:
-            st.error("⚠️ Precio inválido.")
+            st.error("⚠️ Precio inválido. Usa números (ej: 129.99 o 129,99)")
             precio = None
 
         oferta = st.text_input(
@@ -385,6 +385,7 @@ def gestionar_lista():
             placeholder="Ej: 2x1, 0.10"
         )
 
+        # Subtotal en tiempo real
         if precio is not None:
             subtotal = calcular_subtotal(cantidad, precio, oferta)
             st.markdown(f"**💵 Subtotal estimado: $ {subtotal:,.2f}**")
@@ -395,19 +396,19 @@ def gestionar_lista():
 
         if submitted:
             if not nombre.strip():
-                st.error("⚠️ Nombre obligatorio.")
+                st.error("⚠️ El nombre del producto es obligatorio.")
             elif precio is None:
-                st.error("⚠️ Precio inválido.")
+                st.error("⚠️ El precio debe ser un número válido.")
             else:
                 if id_editar:
                     modificar_producto(id_editar, nombre, cantidad, precio, oferta)
-                    st.success("✅ Actualizado.")
+                    st.success("✅ Producto actualizado.")
                 else:
                     if nombre in nombres_previos:
-                        st.warning("⚠️ Ya existe. Edítalo.")
+                        st.warning("⚠️ Este producto ya existe. Edítalo desde la lista.")
                     else:
                         agregar_producto(nombre, cantidad, precio, oferta)
-                        st.success("✅ Agregado.")
+                        st.success("✅ Producto agregado.")
                 st.rerun()
 
 
@@ -431,12 +432,10 @@ def mostrar_resumen():
     st.markdown("### Gastos por Comercio")
     st.bar_chart(resumen["gastos_por_comercio"])
 
-    # Botón para limpiar base de datos
     st.divider()
     st.warning("⚠️ Esta acción eliminará TODOS los datos (lista actual y historial).")
     if st.button("🧹 Limpiar Base de Datos Completa"):
         limpiar_base_de_datos()
-        st.rerun()
 
 
 # --------------------------
@@ -472,7 +471,7 @@ def ver_historial():
             st.dataframe(df_detalle, use_container_width=True, hide_index=True)
             st.markdown(f"### **Total de la compra: $ {total_detalle:,.2f}**")
         else:
-            st.info("❌ No se encontró detalle.")
+            st.info("❌ No se encontró detalle para ese ID.")
 
 
 # ==========================
