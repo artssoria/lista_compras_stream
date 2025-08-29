@@ -160,7 +160,6 @@ def guardar_historial(total, comercio):
             conn.commit()
         st.cache_data.clear()
         st.success(f"✅ Compra guardada en '{comercio}' y lista vaciada.")
-        # ✅ Forma segura de limpiar el input
         st.session_state["comercio_actual"] = ""
     except Exception as e:
         st.error(f"Error al guardar historial: {e}")
@@ -179,7 +178,7 @@ def calcular_subtotal(cantidad, precio, oferta):
         descuento = float(oferta)
         return cantidad * precio * (1 - descuento)
     except ValueError:
-        return cantidad * precio
+        return cantidad * precio  # Ignorar oferta si no es válida
 
 def calcular_totales(df):
     """Calcula totales y devuelve DataFrame con subtotal."""
@@ -211,7 +210,7 @@ def main():
 def gestionar_lista():
     st.subheader("📋 Tu Lista de Compras")
     
-    # Usar session_state para mantener el valor del comercio
+    # Inicializar session_state
     if "comercio_actual" not in st.session_state:
         st.session_state.comercio_actual = ""
 
@@ -222,11 +221,12 @@ def gestionar_lista():
     if not df.empty:
         df_display, total = calcular_totales(df)
 
-        # Formatear para mostrar
-        df_show = df_display[["name", "quantity", "price", "offer", "Subtotal"]].copy()
-        df_show.columns = ["Producto", "Cant.", "Precio ($)", "Oferta", "Subtotal ($)"]
+        # Mostrar ID claramente
+        df_show = df_display[["id", "name", "quantity", "price", "offer", "Subtotal"]].copy()
+        df_show.columns = ["ID", "Producto", "Cant.", "Precio ($)", "Oferta", "Subtotal ($)"]
         df_show["Precio ($)"] = df_show["Precio ($)"].map("${:.2f}".format)
         df_show["Subtotal ($)"] = df_show["Subtotal ($)"].map("${:.2f}".format)
+        df_show["Oferta"] = df_show["Oferta"].fillna("—")
 
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
@@ -238,9 +238,10 @@ def gestionar_lista():
             if st.button("🗑️ Eliminar", use_container_width=True):
                 if id_borrar in df["id"].values:
                     eliminar_producto(id_borrar)
+                    st.success(f"Producto ID {id_borrar} eliminado.")
                     st.rerun()
                 else:
-                    st.error("ID no encontrado.")
+                    st.error("❌ ID no encontrado en la lista.")
 
         with col2:
             if st.button("🆕 Guardar y vaciar lista", use_container_width=True):
@@ -262,30 +263,32 @@ def gestionar_lista():
     st.divider()
     st.subheader("➕ Agregar o Modificar Producto")
 
-    productos_previos = obtener_lista()["name"].unique().tolist() if not obtener_lista().empty else []
+    productos_previos = obtener_lista()
+    nombres_previos = productos_previos["name"].tolist() if not productos_previos.empty else []
 
     with st.form("producto_form"):
-        seleccion = st.selectbox(
-            "Selecciona un producto para editar o deja 'Nuevo'",
-            ["➕ Nuevo producto"] + [f"✏️ {name}" for name in productos_previos]
-        )
+        # Mostrar opciones con ID para evitar confusión
+        opciones = ["➕ Nuevo producto"]
+        if not productos_previos.empty:
+            for _, row in productos_previos.iterrows():
+                opciones.append(f"✏️ ID {row['id']}: {row['name']}")
+
+        seleccion = st.selectbox("Selecciona un producto para editar o nuevo", opciones)
+
         id_editar = None
         datos_actuales = {}
 
         if seleccion != "➕ Nuevo producto":
-            nombre_selec = seleccion[3:]  # quitar "✏️ "
-            fila = obtener_lista()
+            id_selec = int(seleccion.split(" ")[2])  # Extraer ID de "✏️ ID X: ..."
+            fila = productos_previos[productos_previos["id"] == id_selec]
             if not fila.empty:
-                fila = fila[fila["name"] == nombre_selec]
-                if not fila.empty:
-                    fila = fila.iloc[0]
-                    id_editar = fila["id"]
-                    datos_actuales = fila.to_dict()
+                datos_actuales = fila.iloc[0].to_dict()
+                id_editar = id_selec
 
         nombre = st.text_input(
             "Nombre del producto",
             value=datos_actuales.get("name", ""),
-            placeholder="Ej: Leche"
+            placeholder="Ej: Arroz"
         )
 
         col_a, col_b = st.columns(2)
@@ -296,7 +299,6 @@ def gestionar_lista():
                 value=int(datos_actuales.get("quantity", 1)),
                 step=1
             )
-
         with col_b:
             precio_str = st.text_input(
                 "Precio ($)",
@@ -314,19 +316,15 @@ def gestionar_lista():
                     st.error("⚠️ El precio no puede ser negativo.")
                     precio = None
         except ValueError:
-            st.error("⚠️ Por favor ingresa un número válido para el precio (ej: 129.99 o 129,99)")
+            st.error("⚠️ Precio inválido. Usa números (ej: 129.99 o 129,99)")
             precio = None
 
-        # Oferta
-        ofertas_predef = ["", "2x1", "0.10 (10%)", "0.20 (20%)", "0.50 (50%)"]
-        oferta_texto = st.selectbox(
-            "Oferta común",
-            ofertas_predef,
-            index=0 if not datos_actuales or datos_actuales.get("offer") not in ofertas_predef
-            else ofertas_predef.index(datos_actuales["offer"])
+        # Campo único para oferta (simplificado)
+        oferta = st.text_input(
+            "Oferta (opcional)",
+            value=datos_actuales.get("offer", "") if datos_actuales else "",
+            placeholder="Ej: 2x1, 0.10 (10% off)"
         )
-        oferta_manual = st.text_input("Otra oferta (ej: 0.15)", value="")
-        oferta = oferta_manual or oferta_texto
 
         # Subtotal en tiempo real
         if precio is not None:
@@ -341,13 +339,13 @@ def gestionar_lista():
             if not nombre.strip():
                 st.error("⚠️ El nombre del producto es obligatorio.")
             elif precio is None:
-                st.error("⚠️ El precio debe ser un número válido mayor o igual a 0.")
+                st.error("⚠️ El precio debe ser un número válido.")
             else:
                 if id_editar:
                     modificar_producto(id_editar, nombre, cantidad, precio, oferta)
                     st.success("✅ Producto actualizado.")
                 else:
-                    if nombre in productos_previos:
+                    if nombre in nombres_previos:
                         st.warning("⚠️ Este producto ya existe. Edítalo desde la lista.")
                     else:
                         agregar_producto(nombre, cantidad, precio, oferta)
@@ -366,7 +364,6 @@ def ver_historial():
         st.info("📭 Aún no has realizado compras.")
         return
 
-    # ✅ Formatear sin usar .astype con funciones
     df_show = df_hist[["id", "date", "store", "total"]].copy()
     df_show.columns = ["ID", "Fecha", "Comercio", "Total ($)"]
     df_show["Total ($)"] = df_show["Total ($)"].map("${:.2f}".format)
@@ -384,6 +381,7 @@ def ver_historial():
             df_detalle.columns = ["Producto", "Cant.", "Precio ($)", "Oferta", "Subtotal ($)"]
             df_detalle["Precio ($)"] = df_detalle["Precio ($)"].map("${:.2f}".format)
             df_detalle["Subtotal ($)"] = df_detalle["Subtotal ($)"].map("${:.2f}".format)
+            df_detalle["Oferta"] = df_detalle["Oferta"].fillna("—")
 
             st.dataframe(df_detalle, use_container_width=True, hide_index=True)
             st.markdown(f"### **Total de la compra: $ {total_detalle:,.2f}**")
