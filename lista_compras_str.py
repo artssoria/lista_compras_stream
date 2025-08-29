@@ -102,7 +102,7 @@ def agregar_producto(nombre, cantidad, precio, oferta):
                 (nombre.strip(), cantidad, precio, oferta.strip() if oferta else None)
             )
             conn.commit()
-        st.cache_data.clear()  # Limpiar caché
+        st.cache_data.clear()
     except Exception as e:
         st.error(f"Error al agregar producto: {e}")
 
@@ -151,7 +151,6 @@ def guardar_historial(total, comercio):
             )
             purchase_id = cursor.lastrowid
 
-            # Insertar productos actuales
             productos = obtener_lista().values.tolist()
             for _, nombre, cantidad, precio, oferta in productos:
                 cursor.execute(
@@ -161,6 +160,8 @@ def guardar_historial(total, comercio):
             conn.commit()
         st.cache_data.clear()
         st.success(f"✅ Compra guardada en '{comercio}' y lista vaciada.")
+        # ✅ Forma segura de limpiar el input
+        st.session_state["comercio_actual"] = ""
     except Exception as e:
         st.error(f"Error al guardar historial: {e}")
 
@@ -178,7 +179,7 @@ def calcular_subtotal(cantidad, precio, oferta):
         descuento = float(oferta)
         return cantidad * precio * (1 - descuento)
     except ValueError:
-        return cantidad * precio  # Si no es válido, ignorar oferta
+        return cantidad * precio
 
 def calcular_totales(df):
     """Calcula totales y devuelve DataFrame con subtotal."""
@@ -210,30 +211,25 @@ def main():
 def gestionar_lista():
     st.subheader("📋 Tu Lista de Compras")
     
-    # Cargar lista
+    # Usar session_state para mantener el valor del comercio
+    if "comercio_actual" not in st.session_state:
+        st.session_state.comercio_actual = ""
+
+    comercio = st.text_input("🏪 Nombre del comercio", value=st.session_state.comercio_actual, key="comercio_actual")
+
     df = obtener_lista()
-    
-    # Campo para comercio
-    comercio = st.text_input("🏪 Nombre del comercio", key="comercio_actual")
 
     if not df.empty:
         df_display, total = calcular_totales(df)
-        st.dataframe(
-            df_display[["name", "quantity", "price", "offer", "Subtotal"]]
-            .rename(columns={
-                "name": "Producto",
-                "quantity": "Cant.",
-                "price": "Precio ($)",
-                "offer": "Oferta",
-                "Subtotal": "Subtotal ($)"
-            }),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Precio ($)": st.column_config.NumberColumn(format="$ %.2f"),
-                "Subtotal ($)": st.column_config.NumberColumn(format="$ %.2f"),
-            }
-        )
+
+        # Formatear para mostrar
+        df_show = df_display[["name", "quantity", "price", "offer", "Subtotal"]].copy()
+        df_show.columns = ["Producto", "Cant.", "Precio ($)", "Oferta", "Subtotal ($)"]
+        df_show["Precio ($)"] = df_show["Precio ($)"].map("${:.2f}".format)
+        df_show["Subtotal ($)"] = df_show["Subtotal ($)"].map("${:.2f}".format)
+
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
+
         st.markdown(f"### **Total: $ {total:,.2f}**")
 
         col1, col2, col3 = st.columns(3)
@@ -242,7 +238,7 @@ def gestionar_lista():
             if st.button("🗑️ Eliminar", use_container_width=True):
                 if id_borrar in df["id"].values:
                     eliminar_producto(id_borrar)
-                    st.success("Producto eliminado.")
+                    st.rerun()
                 else:
                     st.error("ID no encontrado.")
 
@@ -252,12 +248,12 @@ def gestionar_lista():
                     st.error("⚠️ Ingresa el nombre del comercio.")
                 else:
                     guardar_historial(total, comercio)
-                    st.session_state.comercio_actual = ""
 
         with col3:
             if st.button("❌ Vaciar todo", type="secondary", use_container_width=True):
                 borrar_lista()
                 st.success("Lista vaciada.")
+                st.rerun()
 
     else:
         st.info("📭 Tu lista está vacía. Agrega productos abajo.")
@@ -278,9 +274,13 @@ def gestionar_lista():
 
         if seleccion != "➕ Nuevo producto":
             nombre_selec = seleccion[3:]  # quitar "✏️ "
-            fila = obtener_lista()[obtener_lista()["name"] == nombre_selec].iloc[0]
-            id_editar = fila["id"]
-            datos_actuales = fila.to_dict()
+            fila = obtener_lista()
+            if not fila.empty:
+                fila = fila[fila["name"] == nombre_selec]
+                if not fila.empty:
+                    fila = fila.iloc[0]
+                    id_editar = fila["id"]
+                    datos_actuales = fila.to_dict()
 
         nombre = st.text_input(
             "Nombre del producto",
@@ -298,21 +298,18 @@ def gestionar_lista():
             )
 
         with col_b:
-            # ✅ Campo de precio como texto libre
             precio_str = st.text_input(
                 "Precio ($)",
-                value="" if pd.isna(datos_actuales.get("price")) or not datos_actuales else str(float(datos_actuales["price"])),
+                value="" if not datos_actuales else str(float(datos_actuales["price"])),
                 placeholder="Ej: 150.99"
             )
 
         # Validar precio
         try:
-            if precio_str == "" or precio_str is None:
+            if not precio_str or precio_str.strip() == "":
                 precio = None
             else:
-                # Reemplazar coma por punto para permitir entrada internacional
-                precio_limpio = precio_str.replace(",", ".")
-                precio = float(precio_limpio)
+                precio = float(precio_str.replace(",", "."))
                 if precio < 0:
                     st.error("⚠️ El precio no puede ser negativo.")
                     precio = None
@@ -325,12 +322,13 @@ def gestionar_lista():
         oferta_texto = st.selectbox(
             "Oferta común",
             ofertas_predef,
-            index=ofertas_predef.index(datos_actuales.get("offer", "")) if datos_actuales and datos_actuales.get("offer") in ofertas_predef else 0
+            index=0 if not datos_actuales or datos_actuales.get("offer") not in ofertas_predef
+            else ofertas_predef.index(datos_actuales["offer"])
         )
         oferta_manual = st.text_input("Otra oferta (ej: 0.15)", value="")
         oferta = oferta_manual or oferta_texto
 
-        # Subtotal en tiempo real (solo si el precio es válido)
+        # Subtotal en tiempo real
         if precio is not None:
             subtotal = calcular_subtotal(cantidad, precio, oferta)
             st.markdown(f"**💵 Subtotal estimado: $ {subtotal:,.2f}**")
@@ -368,37 +366,26 @@ def ver_historial():
         st.info("📭 Aún no has realizado compras.")
         return
 
-    st.dataframe(
-        df_hist[["id", "date", "store", "total"]]
-        .rename(columns={"id": "ID", "date": "Fecha", "store": "Comercio", "total": "Total ($)"})
-        .astype({"Total ($)": "$ {:.2f}".format}),
-        use_container_width=True,
-        hide_index=True,
-    )
+    # ✅ Formatear sin usar .astype con funciones
+    df_show = df_hist[["id", "date", "store", "total"]].copy()
+    df_show.columns = ["ID", "Fecha", "Comercio", "Total ($)"]
+    df_show["Total ($)"] = df_show["Total ($)"].map("${:.2f}".format)
+
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
 
     st.divider()
-    compra_id = st.number_input("Ver detalle de compra (ID)", min_value=1, step=1)
+    compra_id = st.number_input("Ver detalle de compra (ID)", min_value=1, step=1, key="hist_id")
     if st.button("🔍 Mostrar detalle"):
         detalle = obtener_detalle_compra(compra_id)
         if not detalle.empty:
             detalle_calc, total_detalle = calcular_totales(detalle)
-            st.dataframe(
-                detalle_calc[["name", "quantity", "price", "offer", "Subtotal"]]
-                .rename(columns={
-                    "name": "Producto",
-                    "quantity": "Cant.",
-                    "price": "Precio ($)",
-                    "offer": "Oferta",
-                    "Subtotal": "Subtotal ($)"
-                })
-                .round({"Precio ($)": 2, "Subtotal ($)": 2})
-                .astype({
-                    "Precio ($)": lambda x: x.map("${:.2f}".format),
-                    "Subtotal ($)": lambda x: x.map("${:.2f}".format)
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
+
+            df_detalle = detalle_calc[["name", "quantity", "price", "offer", "Subtotal"]].copy()
+            df_detalle.columns = ["Producto", "Cant.", "Precio ($)", "Oferta", "Subtotal ($)"]
+            df_detalle["Precio ($)"] = df_detalle["Precio ($)"].map("${:.2f}".format)
+            df_detalle["Subtotal ($)"] = df_detalle["Subtotal ($)"].map("${:.2f}".format)
+
+            st.dataframe(df_detalle, use_container_width=True, hide_index=True)
             st.markdown(f"### **Total de la compra: $ {total_detalle:,.2f}**")
         else:
             st.info("❌ No se encontró detalle para ese ID.")
