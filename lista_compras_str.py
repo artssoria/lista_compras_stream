@@ -103,7 +103,7 @@ def agregar_producto(nombre, cantidad, precio, oferta):
                 (nombre.strip(), cantidad, precio, oferta.strip() if oferta else None)
             )
             conn.commit()
-        st.cache_data.clear()  # Limpiar caché
+        st.cache_data.clear()
     except Exception as e:
         st.error(f"Error al agregar producto: {e}")
 
@@ -152,7 +152,6 @@ def guardar_historial(total, comercio):
             )
             purchase_id = cursor.lastrowid
 
-            # Insertar productos actuales
             productos = obtener_lista().values.tolist()
             for _, nombre, cantidad, precio, oferta in productos:
                 cursor.execute(
@@ -179,7 +178,7 @@ def calcular_subtotal(cantidad, precio, oferta):
         descuento = float(oferta)
         return cantidad * precio * (1 - descuento)
     except ValueError:
-        return cantidad * precio  # Si no es válido, ignorar oferta
+        return cantidad * precio
 
 def calcular_totales(df):
     """Calcula totales y devuelve DataFrame con subtotal."""
@@ -224,18 +223,18 @@ def gestionar_lista():
             .rename(columns={
                 "name": "Producto",
                 "quantity": "Cant.",
-                "price": "Precio",
+                "price": "Precio ($)",
                 "offer": "Oferta",
-                "Subtotal": "Subtotal"
+                "Subtotal": "Subtotal ($)"
             }),
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Precio": st.column_config.NumberColumn(format="%.2f €"),
-                "Subtotal": st.column_config.NumberColumn(format="%.2f €"),
+                "Precio ($)": st.column_config.NumberColumn(format="$ %.2f"),
+                "Subtotal ($)": st.column_config.NumberColumn(format="$ %.2f"),
             }
         )
-        st.markdown(f"### **Total: ${total:.2f}**")
+        st.markdown(f"### **Total: $ {total:,.2f}**")
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -267,7 +266,6 @@ def gestionar_lista():
     st.divider()
     st.subheader("➕ Agregar o Modificar Producto")
 
-    # Opciones de productos anteriores
     productos_previos = obtener_lista()["name"].unique().tolist() if not obtener_lista().empty else []
 
     with st.form("producto_form"):
@@ -284,7 +282,6 @@ def gestionar_lista():
             id_editar = fila["id"]
             datos_actuales = fila.to_dict()
 
-        # Campos
         nombre = st.text_input(
             "Nombre del producto",
             value=datos_actuales.get("name", ""),
@@ -300,25 +297,23 @@ def gestionar_lista():
             )
         with col_b:
             precio = st.number_input(
-                "Precio (€)",
+                "Precio ($)",
                 min_value=0.0,
                 value=float(datos_actuales.get("price", 0.0)),
                 format="%.2f"
             )
 
-        # Oferta con opciones predefinidas
         ofertas_predef = ["", "2x1", "0.10 (10%)", "0.20 (20%)", "0.50 (50%)"]
         oferta_texto = st.selectbox(
-            "Oferta",
+            "Oferta común",
             ofertas_predef,
             index=ofertas_predef.index(datos_actuales.get("offer", "")) if datos_actuales.get("offer") in ofertas_predef else 0
         )
         oferta_manual = st.text_input("Otra oferta (ej: 0.15)", value="")
         oferta = oferta_manual or oferta_texto
 
-        # Subtotal en tiempo real
         subtotal = calcular_subtotal(cantidad, precio, oferta)
-        st.markdown(f"**💵 Subtotal estimado: ${subtotal:.2f}**")
+        st.markdown(f"**💵 Subtotal estimado: $ {subtotal:,.2f}**")
 
         submitted = st.form_submit_button("💾 Guardar producto", type="primary")
 
@@ -332,7 +327,6 @@ def gestionar_lista():
                     modificar_producto(id_editar, nombre, cantidad, precio, oferta)
                     st.success("✅ Producto actualizado.")
                 else:
-                    # Evitar duplicados
                     if nombre in productos_previos:
                         st.warning("⚠️ Este producto ya existe. Edítalo desde la lista.")
                     else:
@@ -353,10 +347,10 @@ def ver_historial():
 
     st.dataframe(
         df_hist[["id", "date", "store", "total"]]
-        .rename(columns={"id": "ID", "date": "Fecha", "store": "Comercio", "total": "Total"}),
+        .rename(columns={"id": "ID", "date": "Fecha", "store": "Comercio", "total": "Total ($)"}),
         use_container_width=True,
         hide_index=True,
-        column_config={"total": st.column_config.NumberColumn(format="%.2f €")}
+        column_config={"Total ($)": st.column_config.NumberColumn(format="$ %.2f")}
     )
 
     st.divider()
@@ -370,18 +364,18 @@ def ver_historial():
                 .rename(columns={
                     "name": "Producto",
                     "quantity": "Cant.",
-                    "price": "Precio",
+                    "price": "Precio ($)",
                     "offer": "Oferta",
-                    "Subtotal": "Subtotal"
+                    "Subtotal": "Subtotal ($)"
                 }),
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "Precio": st.column_config.NumberColumn(format="%.2f €"),
-                    "Subtotal": st.column_config.NumberColumn(format="%.2f €"),
+                    "Precio ($)": st.column_config.NumberColumn(format="$ %.2f"),
+                    "Subtotal ($)": st.column_config.NumberColumn(format="$ %.2f"),
                 }
             )
-            st.markdown(f"### **Total de la compra: ${total_detalle:.2f}**")
+            st.markdown(f"### **Total de la compra: $ {total_detalle:,.2f}**")
         else:
             st.info("❌ No se encontró detalle para ese ID.")
 
