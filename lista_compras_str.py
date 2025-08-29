@@ -2,7 +2,6 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
-import os
 
 # ==========================
 # CONFIGURACIÓN
@@ -103,7 +102,7 @@ def agregar_producto(nombre, cantidad, precio, oferta):
                 (nombre.strip(), cantidad, precio, oferta.strip() if oferta else None)
             )
             conn.commit()
-        st.cache_data.clear()
+        st.cache_data.clear()  # Limpiar caché
     except Exception as e:
         st.error(f"Error al agregar producto: {e}")
 
@@ -152,6 +151,7 @@ def guardar_historial(total, comercio):
             )
             purchase_id = cursor.lastrowid
 
+            # Insertar productos actuales
             productos = obtener_lista().values.tolist()
             for _, nombre, cantidad, precio, oferta in productos:
                 cursor.execute(
@@ -178,7 +178,7 @@ def calcular_subtotal(cantidad, precio, oferta):
         descuento = float(oferta)
         return cantidad * precio * (1 - descuento)
     except ValueError:
-        return cantidad * precio
+        return cantidad * precio  # Si no es válido, ignorar oferta
 
 def calcular_totales(df):
     """Calcula totales y devuelve DataFrame con subtotal."""
@@ -293,35 +293,57 @@ def gestionar_lista():
             cantidad = st.number_input(
                 "Cantidad",
                 min_value=1,
-                value=int(datos_actuales.get("quantity", 1))
-            )
-        with col_b:
-            precio = st.number_input(
-                "Precio ($)",
-                min_value=0.0,
-                value=float(datos_actuales.get("price", 0.0)),
-                format="%.2f"
+                value=int(datos_actuales.get("quantity", 1)),
+                step=1
             )
 
+        with col_b:
+            # ✅ Campo de precio como texto libre
+            precio_str = st.text_input(
+                "Precio ($)",
+                value="" if pd.isna(datos_actuales.get("price")) or not datos_actuales else str(float(datos_actuales["price"])),
+                placeholder="Ej: 150.99"
+            )
+
+        # Validar precio
+        try:
+            if precio_str == "" or precio_str is None:
+                precio = None
+            else:
+                # Reemplazar coma por punto para permitir entrada internacional
+                precio_limpio = precio_str.replace(",", ".")
+                precio = float(precio_limpio)
+                if precio < 0:
+                    st.error("⚠️ El precio no puede ser negativo.")
+                    precio = None
+        except ValueError:
+            st.error("⚠️ Por favor ingresa un número válido para el precio (ej: 129.99 o 129,99)")
+            precio = None
+
+        # Oferta
         ofertas_predef = ["", "2x1", "0.10 (10%)", "0.20 (20%)", "0.50 (50%)"]
         oferta_texto = st.selectbox(
             "Oferta común",
             ofertas_predef,
-            index=ofertas_predef.index(datos_actuales.get("offer", "")) if datos_actuales.get("offer") in ofertas_predef else 0
+            index=ofertas_predef.index(datos_actuales.get("offer", "")) if datos_actuales and datos_actuales.get("offer") in ofertas_predef else 0
         )
         oferta_manual = st.text_input("Otra oferta (ej: 0.15)", value="")
         oferta = oferta_manual or oferta_texto
 
-        subtotal = calcular_subtotal(cantidad, precio, oferta)
-        st.markdown(f"**💵 Subtotal estimado: $ {subtotal:,.2f}**")
+        # Subtotal en tiempo real (solo si el precio es válido)
+        if precio is not None:
+            subtotal = calcular_subtotal(cantidad, precio, oferta)
+            st.markdown(f"**💵 Subtotal estimado: $ {subtotal:,.2f}**")
+        else:
+            st.markdown("**💵 Subtotal estimado: —**")
 
         submitted = st.form_submit_button("💾 Guardar producto", type="primary")
 
         if submitted:
             if not nombre.strip():
                 st.error("⚠️ El nombre del producto es obligatorio.")
-            elif precio <= 0:
-                st.error("⚠️ El precio debe ser mayor a 0.")
+            elif precio is None:
+                st.error("⚠️ El precio debe ser un número válido mayor o igual a 0.")
             else:
                 if id_editar:
                     modificar_producto(id_editar, nombre, cantidad, precio, oferta)
@@ -333,6 +355,7 @@ def gestionar_lista():
                         agregar_producto(nombre, cantidad, precio, oferta)
                         st.success("✅ Producto agregado.")
                 st.rerun()
+
 
 # --------------------------
 # HISTORIAL
@@ -347,10 +370,10 @@ def ver_historial():
 
     st.dataframe(
         df_hist[["id", "date", "store", "total"]]
-        .rename(columns={"id": "ID", "date": "Fecha", "store": "Comercio", "total": "Total ($)"}),
+        .rename(columns={"id": "ID", "date": "Fecha", "store": "Comercio", "total": "Total ($)"})
+        .astype({"Total ($)": "$ {:.2f}".format}),
         use_container_width=True,
         hide_index=True,
-        column_config={"Total ($)": st.column_config.NumberColumn(format="$ %.2f")}
     )
 
     st.divider()
@@ -367,17 +390,19 @@ def ver_historial():
                     "price": "Precio ($)",
                     "offer": "Oferta",
                     "Subtotal": "Subtotal ($)"
+                })
+                .round({"Precio ($)": 2, "Subtotal ($)": 2})
+                .astype({
+                    "Precio ($)": lambda x: x.map("${:.2f}".format),
+                    "Subtotal ($)": lambda x: x.map("${:.2f}".format)
                 }),
                 use_container_width=True,
                 hide_index=True,
-                column_config={
-                    "Precio ($)": st.column_config.NumberColumn(format="$ %.2f"),
-                    "Subtotal ($)": st.column_config.NumberColumn(format="$ %.2f"),
-                }
             )
             st.markdown(f"### **Total de la compra: $ {total_detalle:,.2f}**")
         else:
             st.info("❌ No se encontró detalle para ese ID.")
+
 
 # ==========================
 # EJECUCIÓN
