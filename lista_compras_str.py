@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import os
 
 # ==========================
 # CONFIGURACIÓN
@@ -165,6 +166,53 @@ def guardar_historial(total, comercio):
         st.error(f"Error al guardar historial: {e}")
 
 # ==========================
+# NUEVAS FUNCIONES
+# ==========================
+
+def limpiar_base_de_datos():
+    """Elimina TODOS los datos: lista, historial y detalles."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.execute('DELETE FROM shopping_list')
+            conn.execute('DELETE FROM purchase_details')
+            conn.execute('DELETE FROM shopping_history')
+            conn.commit()
+        st.cache_data.clear()
+        st.success("✅ Base de datos limpiada por completo.")
+    except Exception as e:
+        st.error(f"Error al limpiar la base de datos: {e}")
+
+def obtener_tamano_db():
+    """Devuelve el tamaño del archivo de la base de datos en KB o MB."""
+    if os.path.exists(DB_NAME):
+        tamaño_bytes = os.path.getsize(DB_NAME)
+        if tamaño_bytes < 1024:
+            return f"{tamaño_bytes} B"
+        elif tamaño_bytes < 1024 * 1024:
+            return f"{tamaño_bytes / 1024:.2f} KB"
+        else:
+            return f"{tamaño_bytes / (1024*1024):.2f} MB"
+    return "0 B"
+
+def obtener_resumen_gastos():
+    """Devuelve un resumen de gastos del historial."""
+    df_hist = obtener_historial()
+    if df_hist.empty:
+        return None
+
+    total_gastado = df_hist["total"].sum()
+    num_compras = len(df_hist)
+    promedio = total_gastado / num_compras if num_compras > 0 else 0
+    gastos_por_comercio = df_hist.groupby("store")["total"].sum().round(2)
+
+    return {
+        "total_gastado": total_gastado,
+        "num_compras": num_compras,
+        "promedio": promedio,
+        "gastos_por_comercio": gastos_por_comercio
+    }
+
+# ==========================
 # CÁLCULOS
 # ==========================
 def calcular_subtotal(cantidad, precio, oferta):
@@ -178,7 +226,7 @@ def calcular_subtotal(cantidad, precio, oferta):
         descuento = float(oferta)
         return cantidad * precio * (1 - descuento)
     except ValueError:
-        return cantidad * precio  # Ignorar oferta si no es válida
+        return cantidad * precio
 
 def calcular_totales(df):
     """Calcula totales y devuelve DataFrame con subtotal."""
@@ -196,11 +244,17 @@ def main():
     init_db()
     st.title("🛒 Lista de Compras Inteligente")
 
-    menu = st.sidebar.radio("📌 Menú", ["🛒 Lista de Compras", "📜 Historial"])
+    menu = st.sidebar.radio("📌 Menú", ["🛒 Lista de Compras", "📊 Resumen", "📜 Historial"])
     st.sidebar.divider()
+
+    # Mostrar tamaño de la base de datos
+    tamaño_db = obtener_tamano_db()
+    st.sidebar.info(f"🗄️ Base de datos: {tamaño_db}")
 
     if menu == "🛒 Lista de Compras":
         gestionar_lista()
+    elif menu == "📊 Resumen":
+        mostrar_resumen()
     elif menu == "📜 Historial":
         ver_historial()
 
@@ -210,7 +264,6 @@ def main():
 def gestionar_lista():
     st.subheader("📋 Tu Lista de Compras")
     
-    # Inicializar session_state
     if "comercio_actual" not in st.session_state:
         st.session_state.comercio_actual = ""
 
@@ -219,9 +272,15 @@ def gestionar_lista():
     df = obtener_lista()
 
     if not df.empty:
-        df_display, total = calcular_totales(df)
+        # 🔍 Buscador de productos
+        busqueda = st.text_input("🔍 Buscar producto en la lista", "").lower()
+        if busqueda:
+            df_filtrado = df[df["name"].str.lower().str.contains(busqueda)]
+        else:
+            df_filtrado = df.copy()
 
-        # Mostrar ID claramente
+        df_display, total = calcular_totales(df_filtrado)
+
         df_show = df_display[["id", "name", "quantity", "price", "offer", "Subtotal"]].copy()
         df_show.columns = ["ID", "Producto", "Cant.", "Precio ($)", "Oferta", "Subtotal ($)"]
         df_show["Precio ($)"] = df_show["Precio ($)"].map("${:.2f}".format)
@@ -241,7 +300,7 @@ def gestionar_lista():
                     st.success(f"Producto ID {id_borrar} eliminado.")
                     st.rerun()
                 else:
-                    st.error("❌ ID no encontrado en la lista.")
+                    st.error("❌ ID no encontrado.")
 
         with col2:
             if st.button("🆕 Guardar y vaciar lista", use_container_width=True):
@@ -267,7 +326,6 @@ def gestionar_lista():
     nombres_previos = productos_previos["name"].tolist() if not productos_previos.empty else []
 
     with st.form("producto_form"):
-        # Mostrar opciones con ID para evitar confusión
         opciones = ["➕ Nuevo producto"]
         if not productos_previos.empty:
             for _, row in productos_previos.iterrows():
@@ -279,11 +337,14 @@ def gestionar_lista():
         datos_actuales = {}
 
         if seleccion != "➕ Nuevo producto":
-            id_selec = int(seleccion.split(" ")[2])  # Extraer ID de "✏️ ID X: ..."
-            fila = productos_previos[productos_previos["id"] == id_selec]
-            if not fila.empty:
-                datos_actuales = fila.iloc[0].to_dict()
-                id_editar = id_selec
+            try:
+                id_selec = int(seleccion.split(" ")[2])  # Extraer ID
+                fila = productos_previos[productos_previos["id"] == id_selec]
+                if not fila.empty:
+                    datos_actuales = fila.iloc[0].to_dict()
+                    id_editar = id_selec
+            except:
+                pass
 
         nombre = st.text_input(
             "Nombre del producto",
@@ -306,7 +367,6 @@ def gestionar_lista():
                 placeholder="Ej: 150.99"
             )
 
-        # Validar precio
         try:
             if not precio_str or precio_str.strip() == "":
                 precio = None
@@ -316,17 +376,15 @@ def gestionar_lista():
                     st.error("⚠️ El precio no puede ser negativo.")
                     precio = None
         except ValueError:
-            st.error("⚠️ Precio inválido. Usa números (ej: 129.99 o 129,99)")
+            st.error("⚠️ Precio inválido.")
             precio = None
 
-        # Campo único para oferta (simplificado)
         oferta = st.text_input(
             "Oferta (opcional)",
             value=datos_actuales.get("offer", "") if datos_actuales else "",
-            placeholder="Ej: 2x1, 0.10 (10% off)"
+            placeholder="Ej: 2x1, 0.10"
         )
 
-        # Subtotal en tiempo real
         if precio is not None:
             subtotal = calcular_subtotal(cantidad, precio, oferta)
             st.markdown(f"**💵 Subtotal estimado: $ {subtotal:,.2f}**")
@@ -337,20 +395,48 @@ def gestionar_lista():
 
         if submitted:
             if not nombre.strip():
-                st.error("⚠️ El nombre del producto es obligatorio.")
+                st.error("⚠️ Nombre obligatorio.")
             elif precio is None:
-                st.error("⚠️ El precio debe ser un número válido.")
+                st.error("⚠️ Precio inválido.")
             else:
                 if id_editar:
                     modificar_producto(id_editar, nombre, cantidad, precio, oferta)
-                    st.success("✅ Producto actualizado.")
+                    st.success("✅ Actualizado.")
                 else:
                     if nombre in nombres_previos:
-                        st.warning("⚠️ Este producto ya existe. Edítalo desde la lista.")
+                        st.warning("⚠️ Ya existe. Edítalo.")
                     else:
                         agregar_producto(nombre, cantidad, precio, oferta)
-                        st.success("✅ Producto agregado.")
+                        st.success("✅ Agregado.")
                 st.rerun()
+
+
+# --------------------------
+# RESUMEN DE GASTOS
+# --------------------------
+def mostrar_resumen():
+    st.subheader("📊 Resumen de Gastos")
+
+    resumen = obtener_resumen_gastos()
+
+    if resumen is None:
+        st.info("📭 Aún no has realizado compras.")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("💰 Total Gastado", f"$ {resumen['total_gastado']:,.2f}")
+    col2.metric("🛒 Número de Compras", resumen["num_compras"])
+    col3.metric("🧮 Promedio por Compra", f"$ {resumen['promedio']:,.2f}")
+
+    st.markdown("### Gastos por Comercio")
+    st.bar_chart(resumen["gastos_por_comercio"])
+
+    # Botón para limpiar base de datos
+    st.divider()
+    st.warning("⚠️ Esta acción eliminará TODOS los datos (lista actual y historial).")
+    if st.button("🧹 Limpiar Base de Datos Completa"):
+        limpiar_base_de_datos()
+        st.rerun()
 
 
 # --------------------------
@@ -386,7 +472,7 @@ def ver_historial():
             st.dataframe(df_detalle, use_container_width=True, hide_index=True)
             st.markdown(f"### **Total de la compra: $ {total_detalle:,.2f}**")
         else:
-            st.info("❌ No se encontró detalle para ese ID.")
+            st.info("❌ No se encontró detalle.")
 
 
 # ==========================
