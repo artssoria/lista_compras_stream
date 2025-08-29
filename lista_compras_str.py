@@ -141,17 +141,19 @@ def borrar_lista():
         st.error(f"Error al vaciar lista: {e}")
 
 def guardar_historial(total, comercio):
-    """Guarda la compra actual en el historial."""
+    """Guarda la compra actual en el historial y vacía la lista."""
     fecha = datetime.now().strftime("%Y-%m-%d")
     try:
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
+            # Insertar en historial
             cursor.execute(
                 'INSERT INTO shopping_history (date, store, total) VALUES (?, ?, ?)',
                 (fecha, comercio.strip(), total)
             )
             purchase_id = cursor.lastrowid
 
+            # Obtener lista actual
             productos = obtener_lista().values.tolist()
             for _, nombre, cantidad, precio, oferta in productos:
                 cursor.execute(
@@ -159,16 +161,21 @@ def guardar_historial(total, comercio):
                     (purchase_id, nombre, cantidad, precio, oferta)
                 )
             conn.commit()
+
+        # ✅ Vaciar la lista después de guardar
+        borrar_lista()
+
+        # Limpiar caché y mostrar mensaje
         st.cache_data.clear()
         st.success(f"✅ Compra guardada en '{comercio}' y lista vaciada.")
-        st.rerun()  # ✅ Refresca la app: el campo 'comercio_actual' se limpiará al no tener valor fijo
+        st.rerun()  # Refrescar para mostrar lista vacía
+
     except Exception as e:
         st.error(f"Error al guardar historial: {e}")
 
 # ==========================
 # NUEVAS FUNCIONES
 # ==========================
-
 def limpiar_base_de_datos():
     """Elimina TODOS los datos: lista, historial y detalles."""
     try:
@@ -265,18 +272,15 @@ def main():
 def gestionar_lista():
     st.subheader("📋 Tu Lista de Compras")
 
-    # ✅ Solo usamos 'key', sin 'value'. Streamlit maneja el estado automáticamente
+    # Campo de comercio manejado por Streamlit automáticamente
     comercio = st.text_input("🏪 Nombre del comercio", key="comercio_actual")
 
     df = obtener_lista()
 
     if not df.empty:
-        # 🔍 Buscador de productos
+        # 🔍 Buscador
         busqueda = st.text_input("🔍 Buscar producto en la lista", "").lower()
-        if busqueda:
-            df_filtrado = df[df["name"].str.lower().str.contains(busqueda)]
-        else:
-            df_filtrado = df.copy()
+        df_filtrado = df[df["name"].str.lower().str.contains(busqueda)] if busqueda else df.copy()
 
         df_display, total = calcular_totales(df_filtrado)
 
@@ -287,7 +291,6 @@ def gestionar_lista():
         df_show["Oferta"] = df_show["Oferta"].fillna("—")
 
         st.dataframe(df_show, use_container_width=True, hide_index=True)
-
         st.markdown(f"### **Total: $ {total:,.2f}**")
 
         col1, col2, col3 = st.columns(3)
@@ -306,7 +309,7 @@ def gestionar_lista():
                 if not comercio or not comercio.strip():
                     st.error("⚠️ Ingresa el nombre del comercio.")
                 else:
-                    guardar_historial(total, comercio.strip())
+                    guardar_historial(total, comercio.strip())  # ✅ Ahora SÍ vacía la lista
 
         with col3:
             if st.button("❌ Vaciar todo", type="secondary", use_container_width=True):
@@ -317,7 +320,7 @@ def gestionar_lista():
     else:
         st.info("📭 Tu lista está vacía. Agrega productos abajo.")
 
-    # --- Formulario de agregar/modificar ---
+    # --- Formulario: Agregar o Modificar Producto ---
     st.divider()
     st.subheader("➕ Agregar o Modificar Producto")
 
@@ -337,7 +340,7 @@ def gestionar_lista():
 
         if seleccion != "➕ Nuevo producto":
             try:
-                id_selec = int(seleccion.split(" ")[2])  # Extraer ID
+                id_selec = int(seleccion.split(" ")[2])
                 fila = productos_previos[productos_previos["id"] == id_selec]
                 if not fila.empty:
                     datos_actuales = fila.iloc[0].to_dict()
@@ -366,7 +369,6 @@ def gestionar_lista():
                 placeholder="Ej: 150.99"
             )
 
-        # Validar precio
         try:
             if not precio_str or precio_str.strip() == "":
                 precio = None
@@ -385,7 +387,6 @@ def gestionar_lista():
             placeholder="Ej: 2x1, 0.10"
         )
 
-        # Subtotal en tiempo real
         if precio is not None:
             subtotal = calcular_subtotal(cantidad, precio, oferta)
             st.markdown(f"**💵 Subtotal estimado: $ {subtotal:,.2f}**")
@@ -396,19 +397,19 @@ def gestionar_lista():
 
         if submitted:
             if not nombre.strip():
-                st.error("⚠️ El nombre del producto es obligatorio.")
+                st.error("⚠️ Nombre obligatorio.")
             elif precio is None:
-                st.error("⚠️ El precio debe ser un número válido.")
+                st.error("⚠️ Precio inválido.")
             else:
                 if id_editar:
                     modificar_producto(id_editar, nombre, cantidad, precio, oferta)
-                    st.success("✅ Producto actualizado.")
+                    st.success("✅ Actualizado.")
                 else:
                     if nombre in nombres_previos:
-                        st.warning("⚠️ Este producto ya existe. Edítalo desde la lista.")
+                        st.warning("⚠️ Ya existe. Edítalo.")
                     else:
                         agregar_producto(nombre, cantidad, precio, oferta)
-                        st.success("✅ Producto agregado.")
+                        st.success("✅ Agregado.")
                 st.rerun()
 
 
@@ -471,7 +472,7 @@ def ver_historial():
             st.dataframe(df_detalle, use_container_width=True, hide_index=True)
             st.markdown(f"### **Total de la compra: $ {total_detalle:,.2f}**")
         else:
-            st.info("❌ No se encontró detalle para ese ID.")
+            st.info("❌ No se encontró detalle.")
 
 
 # ==========================
